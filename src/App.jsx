@@ -67,9 +67,11 @@ function fmtDur(d) {
   return `${h}h ${m}min`;
 }
 
-// Accept array param so components can pass live state
-function getCleaners(ids, arr) { const a=arr||CLEANERS; return (ids||[]).map(id=>a.find(c=>c.id===id)).filter(Boolean); }
-function getClient(id, arr)    { const a=arr||CLIENTS;  return a.find(c=>c.id===id); }
+// Module-level cache updated when data loads — used by components without prop drilling
+let _cleaners = [];
+let _clients  = [];
+function getCleaners(ids, arr) { const a=arr||_cleaners; return (ids||[]).map(id=>a.find(c=>c.id===id)).filter(Boolean); }
+function getClient(id, arr)    { const a=arr||_clients;  return a.find(c=>c.id===id); }
 
 /* ── Message generators ─────────────────────────────────────────────── */
 // Weekly schedule for a cleaner
@@ -163,8 +165,8 @@ export default function CleanPro() {
       supabase.from("clients").select("*").order("created_at"),
       supabase.from("jobs").select("*").order("created_at"),
     ]);
-    if(cls) setCleaners(cls.map(normalCleaner));
-    if(cts) setClients(cts.map(normalClient));
+    if(cls){ const c=cls.map(normalCleaner); setCleaners(c); _cleaners=c; }
+    if(cts){ const c=cts.map(normalClient);  setClients(c);  _clients=c;  }
     if(jbs) setJobs(jbs.map(normalJob));
     setLoading(false);
   }
@@ -278,14 +280,14 @@ export default function CleanPro() {
                 ? <AddCleanerSheet onAdd={async(c)=>{
                     const{data,error}=await supabase.from("cleaners").insert({name:c.name,phone:c.phone,color:c.color,initials:c.initials}).select().single();
                     if(error){showToast("⚠️ Error saving","err");return;}
-                    setCleaners(p=>[...p,normalCleaner(data)]);
+                    setCleaners(p=>{ const n=[...p,normalCleaner(data)]; _cleaners=n; return n; });
                     setSheet(null);showToast("✅ Cleaner added!");
                   }} onClose={()=>setSheet(null)}/>
                 : sheet==="addClient"
                   ? <AddClientSheet onAdd={async(c)=>{
                     const{data,error}=await supabase.from("clients").insert({name:c.name,address:c.address,postcode:c.postcode,freq:c.freq}).select().single();
                     if(error){showToast("⚠️ Error saving","err");return;}
-                    setClients(p=>[...p,normalClient(data)]);
+                    setClients(p=>{ const n=[...p,normalClient(data)]; _clients=n; return n; });
                     setSheet(null);showToast("✅ Client added!");
                   }} onClose={()=>setSheet(null)}/>
                   : sheet?._type==="client"
@@ -837,7 +839,7 @@ function AddJobSheet({form,setForm,onAdd,onClose,cleaners,clients}){
           Cleaners&nbsp;<span style={{color:"#475569",fontWeight:400,fontSize:11}}>(tap to select one or more)</span>
         </span>
         <div style={{display:"flex",flexDirection:"column",gap:8}}>
-          {CLEANERS.map(c=>{
+          {cleaners.map(c=>{
             const sel=form.cleanerIds.includes(c.id);
             return(
               <button key={c.id} className="cleaner-toggle tap-btn"
@@ -857,7 +859,7 @@ function AddJobSheet({form,setForm,onAdd,onClose,cleaners,clients}){
         {form.cleanerIds.length>0&&(
           <div style={{display:"flex",alignItems:"center",gap:8,marginTop:6,padding:"8px 12px",borderRadius:10,background:"#34d39911",border:"1px solid #34d39933"}}>
             <div style={{display:"flex"}}>
-              {getCleaners(form.cleanerIds).map((c,i)=>(
+              {getCleaners(form.cleanerIds, cleaners).map((c,i)=>(
                 <div key={c.id} style={{marginLeft:i?-8:0}}><Avatar c={c} size={22}/></div>
               ))}
             </div>
@@ -871,8 +873,9 @@ function AddJobSheet({form,setForm,onAdd,onClose,cleaners,clients}){
       {/* Client */}
       <label style={S.formLabel}>
         <span style={S.formLabelText}>Client</span>
-        <select style={S.select} value={form.clientId} onChange={e=>setForm(p=>({...p,clientId:+e.target.value}))}>
-          {CLIENTS.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}
+        <select style={S.select} value={form.clientId} onChange={e=>setForm(p=>({...p,clientId:e.target.value}))}>
+          <option value="">— Select client —</option>
+          {clients.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}
         </select>
       </label>
 
