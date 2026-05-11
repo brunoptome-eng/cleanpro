@@ -1,4 +1,9 @@
 import { useState, useEffect, useRef } from "react";
+import { createClient } from "@supabase/supabase-js";
+
+const SUPABASE_URL  = "https://djropizprkghyzosevyq.supabase.co";
+const SUPABASE_KEY  = "sb_publishable_1BcHgngsktvjkwcr7D7Yjw_n0xovlyi";
+const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
 /* ─── Google Font ─────────────────────────────────────────────────────── */
 const FontLink = () => (
@@ -15,25 +20,15 @@ const FontLink = () => (
     .job-card:active   { transform:scale(.97) }
     .tap-btn:active    { opacity:.7;transform:scale(.95) }
     .cleaner-toggle:active { transform:scale(.93) }
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.3} }
     html, body, #root  { height: 100%; height: 100dvh; margin: 0; padding: 0; }
     #app-root          { display:flex; flex-direction:column; height:100%; height:100dvh; overflow:hidden; }
   `}</style>
 );
 
-/* ─── Static data ─────────────────────────────────────────────────────── */
-const CLEANERS = [
-  { id:1, name:"Maria Santos",   initials:"MS", color:"#34d399", phone:"+44 7700 111 111" },
-  { id:2, name:"Ana Oliveira",   initials:"AO", color:"#818cf8", phone:"+44 7700 222 222" },
-  { id:3, name:"Clara Ferreira", initials:"CF", color:"#fbbf24", phone:"+44 7700 333 333" },
-  { id:4, name:"Sofia Lima",     initials:"SL", color:"#f472b6", phone:"+44 7700 444 444" },
-];
-const CLIENTS = [
-  { id:1, name:"James Wilson",   address:"12 Baker St, London W1U 3BT",     postcode:"W1U", freq:"weekly",      value:120 },
-  { id:2, name:"Emma Thompson",  address:"8 Oxford Rd, Manchester M13 9PL", postcode:"M13", freq:"fortnightly", value:160 },
-  { id:3, name:"Oliver Brown",   address:"3 Kings Rd, Brighton BN1 1NA",    postcode:"BN1", freq:"weekly",      value:90  },
-  { id:4, name:"Sophie Davis",   address:"21 Rose Lane, Leeds LS1 2HT",     postcode:"LS1", freq:"monthly",     value:200 },
-  { id:5, name:"William Harris", address:"7 Park Ave, Bristol BS1 5TR",     postcode:"BS1", freq:"weekly",      value:140 },
-];
+/* ─── Static reference arrays (populated from Supabase) ──────────────── */
+const CLEANERS = []; // loaded at runtime
+const CLIENTS  = []; // loaded at runtime
 const DAYS  = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"];
 const DATES = ["5 May","6 May","7 May","8 May","9 May","10 May","11 May"];
 const HOURS = [
@@ -58,16 +53,7 @@ const DURATIONS = [
   {val:8,    label:"8h"},
 ];
 
-/* ── Jobs: cleanerIds is now an ARRAY — one job per client visit ───────── */
-const SEED_JOBS = [
-  { id:1, cleanerIds:[1,4], clientId:1, day:"Mon", time:"09:00", duration:3, status:"confirmed", note:"" },
-  { id:2, cleanerIds:[1,3], clientId:3, day:"Wed", time:"13:00", duration:2, status:"confirmed", note:"" },
-  { id:3, cleanerIds:[2],   clientId:2, day:"Tue", time:"10:00", duration:4, status:"confirmed", note:"Keys with neighbour" },
-  { id:4, cleanerIds:[2,3], clientId:5, day:"Thu", time:"09:00", duration:3, status:"pending",   note:"" },
-  { id:5, cleanerIds:[3,4], clientId:4, day:"Fri", time:"11:00", duration:2, status:"confirmed", note:"" },
-  { id:6, cleanerIds:[1,2], clientId:1, day:"Sat", time:"09:00", duration:3, status:"confirmed", note:"" },
-  { id:7, cleanerIds:[4],   clientId:5, day:"Mon", time:"14:00", duration:2, status:"pending",   note:"" },
-];
+/* Jobs loaded from Supabase */
 
 /* ─── Helpers ─────────────────────────────────────────────────────────── */
 const SC = { confirmed:"#34d399", pending:"#fbbf24", cancelled:"#f87171" };
@@ -81,12 +67,13 @@ function fmtDur(d) {
   return `${h}h ${m}min`;
 }
 
-function getCleaners(ids) { return (ids||[]).map(id=>CLEANERS.find(c=>c.id===id)).filter(Boolean); }
-function getClient(id)    { return CLIENTS.find(c=>c.id===id); }
+// Accept array param so components can pass live state
+function getCleaners(ids, arr) { const a=arr||CLEANERS; return (ids||[]).map(id=>a.find(c=>c.id===id)).filter(Boolean); }
+function getClient(id, arr)    { const a=arr||CLIENTS;  return a.find(c=>c.id===id); }
 
 /* ── Message generators ─────────────────────────────────────────────── */
 // Weekly schedule for a cleaner
-function buildCleanerMsg(cleaner, jobs) {
+function buildCleanerMsg(cleaner, jobs, cleanerArr, clientArr) {
   const cj = jobs.filter(j=>j.cleanerIds.includes(cleaner.id));
   if (!cj.length) return `Hi ${cleaner.name.split(" ")[0]} 👋\n\nNo jobs scheduled for you this week. We'll be in touch!\n\n— CleanPro`;
   const lines = DAYS
@@ -94,8 +81,8 @@ function buildCleanerMsg(cleaner, jobs) {
       const dj = cj.filter(j=>j.day===d);
       if (!dj.length) return null;
       return dj.map(j => {
-        const client = getClient(j.clientId);
-        const team   = getCleaners(j.cleanerIds).filter(c=>c.id!==cleaner.id);
+        const client = _getClient(j.clientId);
+        const team   = _getCleaners(j.cleanerIds).filter(c=>c.id!==cleaner.id);
         const partner= team.length ? ` (with ${team.map(c=>c.name.split(" ")[0]).join(" & ")})` : "";
         return `  ${d}: ${client?.name} — ${j.time}, ${j.duration}h${partner}\n       📍 ${client?.address}`;
       }).join("\n");
@@ -106,19 +93,19 @@ function buildCleanerMsg(cleaner, jobs) {
 }
 
 // Reminder for a client about their next visit
-function buildClientMsg(client, jobs) {
+function buildClientMsg(client, jobs, cleanerArr, clientArr) {
   const cj   = jobs.filter(j=>j.clientId===client.id);
   const next  = cj[0];
   if (!next) return `Hi ${client.name.split(" ")[0]} 👋\n\nNo upcoming visits scheduled yet. We'll be in touch soon!\n\n— CleanPro`;
-  const team  = getCleaners(next.cleanerIds);
+  const team  = getCleaners(next.cleanerIds, cleanerArr);
   const names = team.map(c=>c.name.split(" ")[0]).join(" & ");
   return `Hi ${client.name.split(" ")[0]} 👋\n\nJust a reminder that your cleaning is scheduled for:\n\n📅 ${next.day} at ${next.time} (${next.duration}h)\n🧹 Cleaner${team.length>1?"s":""}: ${names}\n📍 ${client.address}${next.note?`\n📝 Note: ${next.note}`:""}\n\nSee you then! 😊\n— CleanPro`;
 }
 
 // Reminder from a specific job detail
-function buildJobMsg(job) {
-  const client  = getClient(job.clientId);
-  const cleaners = getCleaners(job.cleanerIds);
+function buildJobMsg(job, cleanerArr, clientArr) {
+  const client  = getClient(job.clientId, clientArr);
+  const cleaners = getCleaners(job.cleanerIds, cleanerArr);
   const names   = cleaners.map(c=>c.name.split(" ")[0]).join(" & ");
   return `Hi ${client?.name.split(" ")[0]} 👋\n\nYour cleaning is confirmed for:\n\n📅 ${job.day} at ${job.time} (${job.duration}h)\n🧹 Cleaner${cleaners.length>1?"s":""}: ${names}\n📍 ${client?.address}${job.note?`\n📝 Note: ${job.note}`:""}\n\nSee you then! 😊\n— CleanPro`;
 }
@@ -148,16 +135,17 @@ function copyText(text, showToast) {
 
 /* ════════════════════════════════════════════════════════════════════════ */
 export default function CleanPro() {
-  const [jobs, setJobs]         = useState(SEED_JOBS);
-  const [cleaners, setCleaners] = useState(CLEANERS);
-  const [clients,  setClients]  = useState(CLIENTS);
-  const [tab, setTab]           = useState("home");
-  const [activeDay, setDay]   = useState("Mon");
-  const [sheet, setSheet]     = useState(null);
-  const [form, setForm]       = useState({ cleanerIds:[1,2], clientId:1, day:"Mon", time:"09:00", duration:2, note:"" });
-  const [toast, setToast]     = useState(null);
+  const [jobs,     setJobs]     = useState([]);
+  const [cleaners, setCleaners] = useState([]);
+  const [clients,  setClients]  = useState([]);
+  const [loading,  setLoading]  = useState(true);
+  const [tab,      setTab]      = useState("home");
+  const [activeDay, setDay]     = useState("Mon");
+  const [sheet,    setSheet]    = useState(null);
+  const [form,     setForm]     = useState({ cleanerIds:[], clientId:"", day:"Mon", time:"09:00", duration:2, note:"", value:"" });
+  const [toast,    setToast]    = useState(null);
   const [sharePreview, setSharePreview] = useState(null);
-  const [isMobile, setMobile] = useState(window.innerWidth < 768);
+  const [isMobile, setMobile]   = useState(window.innerWidth < 768);
 
   useEffect(()=>{
     const fn=()=>setMobile(window.innerWidth<768);
@@ -165,44 +153,80 @@ export default function CleanPro() {
     return ()=>window.removeEventListener("resize",fn);
   },[]);
 
+  // ── Load all data from Supabase ──
+  useEffect(()=>{ loadAll(); },[]);
+
+  async function loadAll(){
+    setLoading(true);
+    const [{ data: cls }, { data: cts }, { data: jbs }] = await Promise.all([
+      supabase.from("cleaners").select("*").order("created_at"),
+      supabase.from("clients").select("*").order("created_at"),
+      supabase.from("jobs").select("*").order("created_at"),
+    ]);
+    if(cls) setCleaners(cls.map(normalCleaner));
+    if(cts) setClients(cts.map(normalClient));
+    if(jbs) setJobs(jbs.map(normalJob));
+    setLoading(false);
+  }
+
+  // Normalise DB rows to camelCase used in UI
+  function normalCleaner(r){ return { id:r.id, name:r.name, phone:r.phone||"", color:r.color||"#34d399", initials:r.initials||r.name.split(" ").map(w=>w[0]).join("").toUpperCase() }; }
+  function normalClient(r) { return { id:r.id, name:r.name, address:r.address, postcode:r.postcode||"", freq:r.freq||"weekly" }; }
+  function normalJob(r)    { return { id:r.id, clientId:r.client_id, cleanerIds:r.cleaner_ids||[], day:r.day, time:r.time, duration:+r.duration, status:r.status, note:r.note||"", value:+r.value||0 }; }
+
   function showToast(msg,type="ok"){
     setToast({msg,type});
     setTimeout(()=>setToast(null),3000);
   }
 
-  function addJob(){
+  async function addJob(){
     if(!form.cleanerIds.length){ showToast("⚠️ Select at least one cleaner","err"); return; }
-
-    // True overlap using minutes for precision
-    const toMin = t => { const [h,m]=t.split(":").map(Number); return h*60+m; };
-    const newStart = toMin(form.time);
-    const newEnd   = newStart + +form.duration * 60;
-    const conflict = jobs.find(j=>{
-      if(j.day !== form.day) return false;
+    if(!form.clientId){ showToast("⚠️ Select a client","err"); return; }
+    const toMin = t=>{ const[h,m]=t.split(":").map(Number); return h*60+m; };
+    const newStart=toMin(form.time), newEnd=newStart+(+form.duration*60);
+    const conflict=jobs.find(j=>{
+      if(j.day!==form.day) return false;
       if(!j.cleanerIds.some(cid=>form.cleanerIds.includes(cid))) return false;
-      const jStart = toMin(j.time);
-      const jEnd   = jStart + j.duration * 60;
-      return newStart < jEnd && newEnd > jStart;
+      const jS=toMin(j.time), jE=jS+j.duration*60;
+      return newStart<jE&&newEnd>jS;
     });
     if(conflict){
-      const cl = getCleaners(conflict.cleanerIds.filter(cid=>form.cleanerIds.includes(cid)));
-      showToast(`⚠️ ${cl[0]?.name.split(" ")[0]} already has a job at that time!`,"err");
-      return;
+      const cl=getCleaners(conflict.cleanerIds.filter(cid=>form.cleanerIds.includes(cid)),cleaners);
+      showToast(`⚠️ ${cl[0]?.name.split(" ")[0]} already has a job then!`,"err"); return;
     }
-    const newJob = { ...form, id:Date.now(), clientId:+form.clientId, duration:+form.duration, value:+form.value||0, status:"pending" };
-    setJobs(p=>[...p, newJob]);
-    // Reset form for next entry
-    setForm({ cleanerIds:[], clientId:1, day:"Mon", time:"09:00", duration:2, note:"", value:"" });
+    const { data, error } = await supabase.from("jobs").insert({
+      client_id:   form.clientId,
+      cleaner_ids: form.cleanerIds,
+      day:         form.day,
+      time:        form.time,
+      duration:    +form.duration,
+      value:       +form.value||0,
+      note:        form.note||"",
+      status:      "pending",
+    }).select().single();
+    if(error){ showToast("⚠️ Error saving job","err"); return; }
+    setJobs(p=>[...p, normalJob(data)]);
+    setForm({ cleanerIds:[], clientId:"", day:"Mon", time:"09:00", duration:2, note:"", value:"" });
     setSheet(null);
     showToast("✅ Job scheduled!");
   }
-  function setStatus(id,status){ setJobs(p=>p.map(j=>j.id===id?{...j,status}:j)); setSheet(null); showToast(`Marked as ${status}`); }
-  function removeJob(id){ setJobs(p=>p.filter(j=>j.id!==id)); setSheet(null); showToast("Job removed","err"); }
-  function copyCleanerMsg(cleaner){ shareMessage(buildCleanerMsg(cleaner, jobs), showToast, setSharePreview); }
-  function copyClientMsg(client)  { shareMessage(buildClientMsg(client, jobs),   showToast, setSharePreview); }
-  function copyJobMsg(job)        { shareMessage(buildJobMsg(job),                showToast, setSharePreview); }
+
+  async function setStatus(id,status){
+    await supabase.from("jobs").update({status}).eq("id",id);
+    setJobs(p=>p.map(j=>j.id===id?{...j,status}:j));
+    setSheet(null); showToast(`Marked as ${status}`);
+  }
+
+  async function removeJob(id){
+    await supabase.from("jobs").delete().eq("id",id);
+    setJobs(p=>p.filter(j=>j.id!==id));
+    setSheet(null); showToast("Job removed","err");
+  }
+  function copyCleanerMsg(cleaner){ shareMessage(buildCleanerMsg(cleaner, jobs, cleaners, clients), showToast, setSharePreview); }
+  function copyClientMsg(client)  { shareMessage(buildClientMsg(client, jobs, cleaners, clients), showToast, setSharePreview); }
+  function copyJobMsg(job)        { shareMessage(buildJobMsg(job, cleaners, clients), showToast, setSharePreview); }
   function copyAllMsg()           {
-    const all = CLEANERS.map(c=>buildCleanerMsg(c,jobs)).join("\n\n---\n\n");
+    const all = cleaners.map(c=>buildCleanerMsg(c,jobs)).join("\n\n---\n\n");
     shareMessage(all, showToast, setSharePreview);
   }
 
@@ -211,6 +235,18 @@ export default function CleanPro() {
   const confirmed = jobs.filter(j=>j.status==="confirmed").length;
   const pending   = jobs.filter(j=>j.status==="pending").length;
   const dayJobs   = jobs.filter(j=>j.day===activeDay).sort((a,b)=>HOURS.indexOf(a.time)-HOURS.indexOf(b.time));
+
+  if(loading) return (
+    <>
+      <FontLink/>
+      <div id="app-root" style={{display:"flex",alignItems:"center",justifyContent:"center",background:"#060d1f",fontFamily:"Outfit,sans-serif"}}>
+        <div style={{textAlign:"center",color:"#34d399"}}>
+          <div style={{fontSize:40,marginBottom:16,animation:"pulse 1.5s infinite"}}>✦</div>
+          <p style={{fontSize:16,fontWeight:700,color:"#94a3b8"}}>Loading CleanPro...</p>
+        </div>
+      </div>
+    </>
+  );
 
   return (
     <>
@@ -239,9 +275,19 @@ export default function CleanPro() {
             {sheet==="addJob"
               ? <AddJobSheet form={form} setForm={setForm} onAdd={addJob} onClose={()=>setSheet(null)} cleaners={cleaners} clients={clients}/>
               : sheet==="addCleaner"
-                ? <AddCleanerSheet onAdd={(c)=>{ setCleaners(p=>[...p,{...c,id:Date.now()}]); setSheet(null); showToast("✅ Cleaner added!"); }} onClose={()=>setSheet(null)}/>
+                ? <AddCleanerSheet onAdd={async(c)=>{
+                    const{data,error}=await supabase.from("cleaners").insert({name:c.name,phone:c.phone,color:c.color,initials:c.initials}).select().single();
+                    if(error){showToast("⚠️ Error saving","err");return;}
+                    setCleaners(p=>[...p,normalCleaner(data)]);
+                    setSheet(null);showToast("✅ Cleaner added!");
+                  }} onClose={()=>setSheet(null)}/>
                 : sheet==="addClient"
-                  ? <AddClientSheet onAdd={(c)=>{ setClients(p=>[...p,{...c,id:Date.now()}]); setSheet(null); showToast("✅ Client added!"); }} onClose={()=>setSheet(null)}/>
+                  ? <AddClientSheet onAdd={async(c)=>{
+                    const{data,error}=await supabase.from("clients").insert({name:c.name,address:c.address,postcode:c.postcode,freq:c.freq}).select().single();
+                    if(error){showToast("⚠️ Error saving","err");return;}
+                    setClients(p=>[...p,normalClient(data)]);
+                    setSheet(null);showToast("✅ Client added!");
+                  }} onClose={()=>setSheet(null)}/>
                   : sheet?._type==="client"
                     ? <ClientSheet client={sheet} jobs={jobs} setSheet={setSheet} copyClientMsg={copyClientMsg} copyJobMsg={copyJobMsg} onClose={()=>setSheet(null)}/>
                     : sheet?._type==="cleaner"
